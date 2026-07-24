@@ -2,3 +2,4 @@ fastapi
 uvicorn
 faker
 python-dotenv
+pandas 
