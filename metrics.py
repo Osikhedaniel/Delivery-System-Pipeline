@@ -1,6 +1,14 @@
+from datetime import UTC, datetime
+import json
+from loguru import logger
 from pyspark.sql import DataFrame
-from pyspark.sql.functions import avg, col, count, countDistinct, date_format, dayofweek, hour, lit, percentile_approx, stddev, to_timestamp, when, lag, lead 
+from pyspark.sql.functions import (
+    avg, col, count, countDistinct, date_format, dayofweek, hour, lit,
+    percentile_approx, stddev, to_timestamp, when, lag, lead, round,
+    min, max, sum
+)
 from pyspark.sql.window import Window 
+from pathlib import Path 
 
 def eta_calculation(df:DataFrame,default_distance_km:float=25) -> DataFrame:
     return df.withColumn("estimated_time_of_arrival",
@@ -30,16 +38,16 @@ def aggregation_calculations(df:DataFrame):
         countDistinct("driver_name").alias("unique_drivers"),
 
         # estimated time of arrivel (eta) calculations 
-        avg("estimated_time_of_arrivel").alias("average_eta_minutes"),
-        min("estimated_time_of_arrivel").alias("min_eta_minutes"),
-        max("estimated_time_of_arrivel").alias("max_eta_minutes")
+        avg("estimated_time_of_arrival").alias("average_eta_minutes"),
+        min("estimated_time_of_arrival").alias("min_eta_minutes"),
+        max("estimated_time_of_arrival").alias("max_eta_minutes")
     )
 
 def calculate_status_breakdown(df:DataFrame):
     return ( df.groupBy("status").agg(
         count("*").alias("count"),
         round(avg("speed"),2).alias("speed"),
-        round(avg("estimated_time_of_arrivel"),2).alias("average_eta_minutes"),
+        round(avg("estimated_time_of_arrival"),2).alias("average_eta_minutes"),
         round(avg("longitude"),4).alias("average_longitude"),
         round(avg("latitude"),4).alias("average_latitude")
     ).orderBy(col("count").desc())
@@ -49,9 +57,9 @@ def calculate_delay_metrics(df:DataFrame):
     return (df.groupBy("delayed_flag").agg(
         count("*").alias("count"),
         round(avg("speed"),2).alias("average_speed"),
-        round(avg("estimated_time_of_arrivel"),2).alias("average_eta"),
+        round(avg("estimated_time_of_arrival"),2).alias("average_eta"),
         round(percentile_approx("speed",0.5),2).alias("median_speed"),
-        round(percentile_approx("estimated_time_of_arrivel",0.5),2).alias("median_eta")
+        round(percentile_approx("estimated_time_of_arrival",0.5),2).alias("median_eta")
     ).orderBy(col("count").desc())
     )
 
@@ -61,7 +69,7 @@ def calculate_vehicle_performance(df:DataFrame):
         avg("speed").alias("avg_speed"),
         max("speed").alias("max_speed"),
         min("speed").alias("min_speed"),
-        avg("estimated_time_of_arrivel").alias("avg_eta"),
+        avg("estimated_time_of_arrival").alias("avg_eta"),
         avg("latitude").alias("avg_latitude"),
         avg("longitude").alias("avg_longitude"),
         sum(when(col("delayed_flag") == True, 1).otherwise(0)).alias("delayed_updates"),
@@ -122,3 +130,50 @@ def calculate_safety_metrics(df:DataFrame):
         round(max("speed"),2).alias("max_speed_observed"),
         countDistinct(when(col("speed") > 100,col("vehicle_id"))).alias("vehicles_exceeding_100kmh")
     )
+
+def spark_df_conversion(spark_df:DataFrame) -> list:
+    try:
+        pandas_df = spark_df.toPandas() 
+        if pandas_df.empty:
+            return []
+        return json.loads(pandas_df.to_json(orient="records",date_format="iso")) 
+    except Exception:
+        return []
+
+def metrics_report(df:DataFrame) -> dict:
+    report = {
+        'last_updated': datetime.now(UTC).isoformat(),
+        'summary': {},
+        'status_breakdown': [],
+        'delay_metrics': [],
+        'vehicle_performance': [],
+        'status_transitions': [],
+        'spatial_metrics': {},
+        'hourly_metrics': [],
+        'safety_metrics': {}
+    }
+
+    if df is None:
+        return report 
+
+    report['summary'] = (spark_df_conversion(aggregation_calculations(df)) or [{}]) [0]
+    report['status_breakdown'] = spark_df_conversion(calculate_status_breakdown(df)) 
+    report['delay_metrics'] = spark_df_conversion(calculate_delay_metrics(df))
+    report['vehicle_performance'] = spark_df_conversion(calculate_vehicle_performance(df))
+    report['status_transitions'] = spark_df_conversion(calculate_status_transitions(df)) 
+    report['spatial_metrics'] = (spark_df_conversion(calculate_spatial_metrics(df)) or [{}]) [0] 
+    report['hourly_metrics'] = spark_df_conversion(calculate_hourly_metrics(df))
+    report['safety_metrics'] = (spark_df_conversion(calculate_safety_metrics(df)) or [{}]) [0]
+
+    print(report)
+
+    return report 
+
+def save_metrics_report(report:dict,filename:str="metrics_report.json") -> Path:
+    path = Path(filename)
+    path.parent.mkdir(parents=True,exist_ok=True)
+    with path.open("w", encoding="utf-8") as f:
+        json.dump(report, f, indent=2, default=str)
+    return path
+
+

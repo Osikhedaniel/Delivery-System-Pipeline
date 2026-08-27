@@ -26,5 +26,5 @@ def generator_function(api_key: str = Security(verify_api_key)):
     return generate_synthetic_data()
 
 @app.get("/gps/bulk")
-def get_bulk_gps_data(records:int=Query(2000,gt=0,le=9000),api_key: str = Security(verify_api_key)):
+def get_bulk_gps_data(records:int=Query(150,gt=0,le=1000),api_key: str = Security(verify_api_key)):
    return [generate_synthetic_data() for _ in range(records)] 

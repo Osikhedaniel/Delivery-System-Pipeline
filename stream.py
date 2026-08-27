@@ -47,8 +47,7 @@ def write_to_postgres(df:DataFrame,
                 port=port,
                 database=database,
                 user=user,
-                password=password,
-                table_name=table_name
+                password=password
             )
 
             cursor = conn.cursor()
@@ -105,17 +104,32 @@ def write_to_postgres(df:DataFrame,
         .start()
     )
 
-def write_to_dashboard_topic(df:DataFrame,kafka_server:str,topic:str):
+# def write_to_dashboard_topic(df:DataFrame,kafka_server:str,topic:str):
+#     kafka_df = df.select(
+#         to_json(struct("*").alias("values"))
+#     )
+
+#     return(
+#         kafka_df.writeStream
+#         .format("kafka")
+#         .option("kafka.bootstrap.servers",kafka_server)
+#         .option("topic", topic)
+#         .option("checkpointLocation","./checkpoints/dashboard")
+#         .outputMode("append")
+#         .start()
+#     )
+
+def write_to_dashboard_topic(df: DataFrame, kafka_server: str, topic: str):
     kafka_df = df.select(
-        to_json(struct("*").alias("values"))
+        to_json(struct("*")).alias("value")
     )
 
-    return(
+    return (
         kafka_df.writeStream
         .format("kafka")
-        .option("kafka.bootstrap.servers",kafka_server)
+        .option("kafka.bootstrap.servers", kafka_server)
         .option("topic", topic)
-        .option("checkpointLocation","./checkpoints/dashboard")
+        .option("checkpointLocation", "./checkpoints/dashboard")
         .outputMode("append")
         .start()
     )

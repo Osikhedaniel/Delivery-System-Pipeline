@@ -1,1 +1,4 @@
 .env
+checkpoints/
+__pycache__/
+metrics_report_folder/

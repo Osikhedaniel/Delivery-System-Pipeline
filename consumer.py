@@ -21,6 +21,8 @@ def creating_spark_session(app_name:str) -> SparkSession:
         SparkSession.builder
         .appName(app_name)
         .config("spark.jars.packages", f"org.apache.spark:spark-sql-kafka-0-10_2.12:{spark_version}")
+        .config("spark.driver.host", "127.0.0.1")        
+        .config("spark.driver.bindAddress", "127.0.0.1") 
         .getOrCreate()
     )
 
@@ -30,6 +32,8 @@ def read_kafka_stream(spark:SparkSession,bootstrap_servers:str,topic:str):
         .format("kafka")
         .option("kafka.bootstrap.servers",bootstrap_servers)
         .option("subscribe",topic)
+        .option("startingOffsets","latest")
+        .option("failOnDataLoss","false")
         .load()
     )
 

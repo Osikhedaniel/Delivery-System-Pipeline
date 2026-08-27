@@ -8,7 +8,7 @@ def parse_json_stream(df:DataFrame,schema) -> DataFrame:
                   schema).alias("Data")
     )
 
-    return parsed_df.select("Data.*")
+    return parsed_df.select("Data.*") 
 
 def add_delay_flag(df:DataFrame) -> DataFrame:
     return df.withColumn("delayed_flag",

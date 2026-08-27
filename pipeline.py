@@ -1,24 +1,29 @@
+import traceback
+
 from loguru import logger 
 from consumer import data_schema, creating_spark_session, read_kafka_stream
 from generator import generate_synthetic_data
 from main import verify_api_key, health_check, generator_function, get_bulk_gps_data
-from metrics import eta_calculation, aggregation_calculations, calculate_status_breakdown, calculate_delay_metrics, calculate_vehicle_performance, calculate_status_transitions, calculate_spatial_metrics, calculate_hourly_metrics, calculate_safety_metrics
+from metrics import eta_calculation, aggregation_calculations, calculate_status_breakdown, calculate_delay_metrics, calculate_vehicle_performance, calculate_status_transitions, calculate_spatial_metrics, calculate_hourly_metrics, calculate_safety_metrics, metrics_report, save_metrics_report
 from producer import extract_data
 from schema import GPSData
 from stream import delivery_window, write_to_console, write_to_postgres, write_to_dashboard_topic
 from transform import parse_json_stream, add_delay_flag, filter_invalid_coordinates, filter_invalid_speed, timestamp_conversion, standardizing_driver_names, standardizing_vehicle_status, removing_null_ids, extracting_date, ingestion_timestamp
 from dotenv import load_dotenv
-import os 
+import os,sys
 from pyspark.sql.functions import col, lit 
 
 load_dotenv()
 
-DB_HOST = os.getenv("host")
-DB_PORT = os.getenv("port")
-DB_NAME = os.getenv("database")
-DB_USER = os.getenv("username")
-DB_PASSWORD = os.getenv("password") 
-DB_TABLE_NAME = os.getenv("tablename")
+DB_HOST = os.getenv("DB_HOST")
+DB_PORT = os.getenv("DB_PORT")
+DB_NAME = os.getenv("DB_NAME")
+DB_USER = os.getenv("DB_USER")
+DB_PASSWORD = os.getenv("DB_PASSWORD") 
+DB_TABLE_NAME = os.getenv("DB_TABLE_NAME")
+
+os.environ["PYSPARK_PYTHON"] = sys.executable
+os.environ["PYSPARK_DRIVER_PYTHON"] = sys.executable
 
 required_vars = ['DB_HOST','DB_PORT','DB_NAME','DB_USER','DB_PASSWORD']
 missing_vars = [var for var in required_vars if not os.getenv(var)]
@@ -66,6 +71,7 @@ def build_pipeline():
         gps_df = removing_null_ids(gps_df) 
         gps_df = extracting_date(gps_df) 
         gps_df = ingestion_timestamp(gps_df) 
+        gps_df = eta_calculation(gps_df) 
 
         # 
         gps_df = gps_df.withColumn("data_type", lit("gps_update"))
@@ -74,7 +80,6 @@ def build_pipeline():
         gps_df = gps_df.withColumn("longitude", col("longitude").cast("double")) 
         gps_df = gps_df.withColumn("speed", col("speed").cast("double"))
         gps_df = gps_df.withColumn("estimated_time_of_arrival", col("estimated_time_of_arrival").cast("double"))
-        gps_df = gps_df.withColumn("delayed_flag",col("delayed_flag").cast("boolean"))
 
         logger.info("Finished Data Transformations")
 
@@ -84,6 +89,52 @@ def build_pipeline():
         return 
     
     queries = []
+
+    # def write_metrics(batch_df,batch_id):
+    #     try:
+    #         if batch_df.rdd.isEmpty():
+    #             logger.info(f"batch {batch_id}: Empty Batch!")
+    #             return 
+
+    #         report = metrics_report(batch_df)
+    #         saved_report = save_metrics_report(report, filename= f"metrics_report_folder/metrics_report_{batch_id}.json")
+    #         logger.info(f"Batch {batch_id}: Successfully saved metrics report at {saved_report}")
+
+    #     except Exception as e:
+    #         # logger.error(f"Batch {batch_id}: Failed to generate metrics report - {e}")
+    #         logger.exception("Full exception:")
+    #         traceback.print_exc()
+    #         raise 
+
+    def write_metrics(batch_df,batch_id):
+        try:
+            if batch_df.limit(1).count() == 0:
+                logger.info(f"batch {batch_id}: Empty Batch!")
+                return 
+
+            report = metrics_report(batch_df)
+            saved_report = save_metrics_report(report, filename= f"metrics_report_folder/metrics_report_{batch_id}.json")
+            logger.info(f"Batch {batch_id}: Successfully saved metrics report at {saved_report}")
+
+        except Exception as e:
+            # logger.error(f"Batch {batch_id}: Failed to generate metrics report - {e}")
+            logger.exception("Full exception:")
+            traceback.print_exc()
+            raise 
+
+    try:
+        logger.info("Starting metrics sink...")
+        metrics_query = (
+            gps_df.writeStream
+            .foreachBatch(write_metrics)
+            .outputMode("append")
+            .option("checkpointLocation", "/tmp/checkpoints/metrics_report")
+            .start()
+        ) 
+        queries.append(metrics_query)
+        logger.info("Successfully started metrics sink")
+    except Exception as e:
+        logger.error(f"Failed to start metrics sink: {e}")
 
     try:
         logger.info("Starting Postgres sink...")
